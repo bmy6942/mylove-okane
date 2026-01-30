@@ -33,3 +33,12 @@ export interface ManagementState {
   serviceFeeRate: string; // Percentage (e.g., 10%)
   splitRatio: string;     // Percentage (e.g., 50%)
 }
+
+export interface SavedRecord {
+  id: string;             // Unique ID (timestamp)
+  timestamp: number;      // Creation time
+  address: string;        // The identifier
+  mode: CalculationMode;
+  subletData?: SublettingState;
+  mgmtData?: ManagementState;
+}

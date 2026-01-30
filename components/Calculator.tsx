@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { 
   Calculator as CalcIcon, 
   AlertTriangle, 
@@ -10,13 +10,16 @@ import {
   FileDown,
   Share2,
   Loader2,
-  MapPin
+  MapPin,
+  Save,
+  History
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
 
 import { InputSection } from './InputSection';
 import { ResultRow } from './ResultRow';
+import { HistoryModal } from './HistoryModal';
 import { 
   VAT_RATE, 
   TAX_THRESHOLD, 
@@ -25,13 +28,34 @@ import {
   HEALTH_RATE,
   MARGIN_WARNING_THRESHOLD
 } from '../constants';
-import { CalculationResult, CalculationMode, SublettingState, ManagementState } from '../types';
+import { CalculationResult, CalculationMode, SublettingState, ManagementState, SavedRecord } from '../types';
 
 export const Calculator: React.FC = () => {
   const [mode, setMode] = useState<CalculationMode>('subletting');
   const [isGenerating, setIsGenerating] = useState(false);
   const resultRef = useRef<HTMLDivElement>(null);
   
+  // History State
+  const [showHistory, setShowHistory] = useState(false);
+  const [savedRecords, setSavedRecords] = useState<SavedRecord[]>([]);
+
+  // Load history from local storage on mount
+  useEffect(() => {
+    const saved = localStorage.getItem('rental_calc_history');
+    if (saved) {
+      try {
+        setSavedRecords(JSON.parse(saved));
+      } catch (e) {
+        console.error("Failed to parse history", e);
+      }
+    }
+  }, []);
+
+  // Persist history when changed
+  useEffect(() => {
+    localStorage.setItem('rental_calc_history', JSON.stringify(savedRecords));
+  }, [savedRecords]);
+
   // Common State
   const [address, setAddress] = useState('');
 
@@ -113,13 +137,56 @@ export const Calculator: React.FC = () => {
     setMgmtData(prev => ({ ...prev, [field]: val }));
   };
 
+  // --- SAVE / LOAD LOGIC ---
+
+  const handleSaveRecord = () => {
+    if (!address.trim()) {
+      alert("請輸入「物件地址」以便儲存與辨識！");
+      return;
+    }
+    if (!result) {
+      alert("請先完成試算數據後再儲存！");
+      return;
+    }
+
+    const newRecord: SavedRecord = {
+      id: Date.now().toString(),
+      timestamp: Date.now(),
+      address: address,
+      mode: mode,
+      subletData: mode === 'subletting' ? { ...subletData } : undefined,
+      mgmtData: mode === 'management' ? { ...mgmtData } : undefined,
+    };
+
+    setSavedRecords(prev => [newRecord, ...prev]);
+    alert(`已成功儲存「${address}」的試算資料！`);
+  };
+
+  const handleLoadRecord = (record: SavedRecord) => {
+    setMode(record.mode);
+    setAddress(record.address);
+    if (record.mode === 'subletting' && record.subletData) {
+      setSubletData(record.subletData);
+    } else if (record.mode === 'management' && record.mgmtData) {
+      setMgmtData(record.mgmtData);
+    }
+  };
+
+  const handleDeleteRecord = (id: string) => {
+    if (confirm("確定要刪除這筆紀錄嗎？")) {
+      setSavedRecords(prev => prev.filter(r => r.id !== id));
+    }
+  };
+
+  // --- EXPORT LOGIC ---
+
   // Helper: Generate Image Blob from Result Section
   const generateImageBlob = async (): Promise<Blob | null> => {
     if (!resultRef.current) return null;
     try {
       const canvas = await html2canvas(resultRef.current, {
         scale: 2, 
-        backgroundColor: '#f3f4f6', // Use light gray to match body, or white. Using theme color looks more natural.
+        backgroundColor: '#f3f4f6', 
         logging: false,
         useCORS: true
       });
@@ -130,19 +197,15 @@ export const Calculator: React.FC = () => {
     }
   };
 
-  // Action 1: Export PDF
   const handleExportPDF = async () => {
     if (!resultRef.current) return;
     setIsGenerating(true);
-    
     try {
-      // Capture the entire ref area (Inputs + Results)
       const canvas = await html2canvas(resultRef.current, { 
         scale: 2, 
         backgroundColor: '#f3f4f6' 
       });
       const imgData = canvas.toDataURL('image/png');
-      
       const pdf = new jsPDF('p', 'mm', 'a4');
       const pdfWidth = pdf.internal.pageSize.getWidth();
       const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
@@ -156,15 +219,12 @@ export const Calculator: React.FC = () => {
     }
   };
 
-  // Action 2: Share Line
   const handleShareLine = async () => {
     if (!resultRef.current) return;
     setIsGenerating(true);
-
     try {
       const blob = await generateImageBlob();
       if (!blob) throw new Error("Blob creation failed");
-
       const file = new File([blob], "calculation-result.png", { type: "image/png" });
 
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
@@ -182,7 +242,6 @@ export const Calculator: React.FC = () => {
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-        
         alert("已為您下載試算圖片！\n\n電腦版請直接將圖片「拖曳」至 LINE 聊天室傳送。");
       }
     } catch (err) {
@@ -196,17 +255,42 @@ export const Calculator: React.FC = () => {
   };
 
   return (
-    <div className="max-w-4xl mx-auto pb-20">
+    <div className="max-w-4xl mx-auto pb-20 relative">
+      <HistoryModal 
+        isOpen={showHistory} 
+        onClose={() => setShowHistory(false)} 
+        records={savedRecords}
+        onLoad={handleLoadRecord}
+        onDelete={handleDeleteRecord}
+      />
+
       {/* Header */}
-      <div className="text-center mb-8">
+      <div className="text-center mb-8 relative">
         <h1 className="text-3xl md:text-4xl font-bold text-slate-800 mb-2 flex items-center justify-center gap-3">
           <CalcIcon className="w-8 h-8 md:w-10 md:h-10 text-indigo-600" />
           包租代管外包試算
         </h1>
         <p className="text-gray-500">外包薪酬結算與利潤分析專業版</p>
+        
+        {/* History Button - Top Right */}
+        <button 
+          onClick={() => setShowHistory(true)}
+          className="absolute right-0 top-0 md:top-2 p-2 flex items-center gap-2 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+          title="查看存檔紀錄"
+        >
+          <div className="relative">
+            <History className="w-6 h-6" />
+            {savedRecords.length > 0 && (
+              <span className="absolute -top-2 -right-2 bg-red-500 text-white text-xs w-5 h-5 flex items-center justify-center rounded-full font-bold border-2 border-white">
+                {savedRecords.length}
+              </span>
+            )}
+          </div>
+          <span className="hidden md:inline font-medium">歷史紀錄</span>
+        </button>
       </div>
 
-      {/* Mode Switcher Tabs - Outside of Capture */}
+      {/* Mode Switcher Tabs */}
       <div className="bg-white rounded-t-2xl shadow-sm border-b border-gray-200 flex overflow-hidden mb-0">
         <button
           onClick={() => setMode('subletting')}
@@ -415,7 +499,15 @@ export const Calculator: React.FC = () => {
 
       {/* Action Buttons */}
       {result && (
-        <div className="mt-8 grid grid-cols-2 gap-4">
+        <div className="mt-8 grid grid-cols-2 md:grid-cols-3 gap-4">
+          <button
+            onClick={handleSaveRecord}
+            className="col-span-2 md:col-span-1 flex items-center justify-center gap-2 bg-slate-700 hover:bg-slate-800 text-white font-bold py-3 px-6 rounded-lg transition-colors shadow-md"
+          >
+            <Save className="w-5 h-5" />
+            儲存試算
+          </button>
+          
           <button
             onClick={handleExportPDF}
             disabled={isGenerating}
