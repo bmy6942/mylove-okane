@@ -1,13 +1,19 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import { 
   Calculator as CalcIcon, 
   AlertTriangle, 
   Wallet, 
   TrendingUp,
   Info,
-  Wand2,
-  X
+  Building2,
+  Briefcase,
+  FileDown,
+  Share2,
+  Loader2
 } from 'lucide-react';
+import { jsPDF } from 'jspdf';
+import html2canvas from 'html2canvas';
+
 import { InputSection } from './InputSection';
 import { ResultRow } from './ResultRow';
 import { 
@@ -18,75 +24,175 @@ import {
   HEALTH_RATE,
   MARGIN_WARNING_THRESHOLD
 } from '../constants';
-import { CalculationResult } from '../types';
+import { CalculationResult, CalculationMode, SublettingState, ManagementState } from '../types';
 
 export const Calculator: React.FC = () => {
-  const [revenue, setRevenue] = useState<string>('');
-  const [cost, setCost] = useState<string>('');
+  const [mode, setMode] = useState<CalculationMode>('subletting');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const resultRef = useRef<HTMLDivElement>(null);
   
-  // Budget Assistant State
-  const [isAssistantOpen, setIsAssistantOpen] = useState(false);
-  const [targetMargin, setTargetMargin] = useState<number>(20);
+  // State for Mode A: Subletting
+  const [subletData, setSubletData] = useState<SublettingState>({
+    rentCost: '',
+    totalRevenue: '',
+    outsourceRate: '10'
+  });
 
-  // Sync logic: When Cost changes manually, update the slider position
-  useEffect(() => {
-    if (!revenue || !cost) return;
-    const revNum = parseFloat(revenue);
-    const costNum = parseFloat(cost);
-    if (revNum > 0 && costNum >= 0) {
-      const realRevenue = revNum / (1 + VAT_RATE);
-      const profit = realRevenue - costNum;
-      const currentMargin = (profit / realRevenue) * 100;
-      // Only update internal slider state if it differs significantly to avoid jitter
-      if (Math.abs(currentMargin - targetMargin) > 0.5) {
-        setTargetMargin(Number(currentMargin.toFixed(1)));
-      }
-    }
-  }, [revenue, cost]);
+  // State for Mode B: Management
+  const [mgmtData, setMgmtData] = useState<ManagementState>({
+    rentAmount: '',
+    serviceFeeRate: '15',
+    splitRatio: '50'
+  });
 
   // Main Calculation Logic
   const result: CalculationResult | null = useMemo(() => {
-    const revNum = parseFloat(revenue);
-    const costNum = parseFloat(cost);
+    let grossRevenue = 0;
+    let outsourceFee = 0;
+    let operationalCost = 0;
 
-    if (isNaN(revNum) || isNaN(costNum)) return null;
+    // 1. Determine base figures based on mode
+    if (mode === 'subletting') {
+      const revenue = parseFloat(subletData.totalRevenue);
+      const cost = parseFloat(subletData.rentCost);
+      const rate = parseFloat(subletData.outsourceRate);
 
-    // 1. Calculate Deductions
-    const tax = costNum > TAX_THRESHOLD ? Math.round(costNum * TAX_RATE) : 0;
-    const health = costNum >= HEALTH_THRESHOLD ? Math.round(costNum * HEALTH_RATE) : 0;
-    const netPay = costNum - tax - health;
+      if (isNaN(revenue) || isNaN(cost) || isNaN(rate)) return null;
 
-    // 2. Calculate Company Profit
-    const realRevenue = Math.round(revNum / (1 + VAT_RATE));
-    const profit = realRevenue - costNum;
+      grossRevenue = revenue;
+      operationalCost = cost;
+      outsourceFee = Math.round(revenue * (rate / 100));
+
+    } else {
+      const rent = parseFloat(mgmtData.rentAmount);
+      const feeRate = parseFloat(mgmtData.serviceFeeRate);
+      const split = parseFloat(mgmtData.splitRatio);
+
+      if (isNaN(rent) || isNaN(feeRate) || isNaN(split)) return null;
+
+      grossRevenue = Math.round(rent * (feeRate / 100));
+      operationalCost = 0; // No rent cost in pure management mode
+      outsourceFee = Math.round(grossRevenue * (split / 100));
+    }
+
+    // 2. Tax & Remittance (Applied to Outsource Fee)
+    const tax = outsourceFee > TAX_THRESHOLD ? Math.round(outsourceFee * TAX_RATE) : 0;
+    const health = outsourceFee >= HEALTH_THRESHOLD ? Math.round(outsourceFee * HEALTH_RATE) : 0;
+    const netPay = outsourceFee - tax - health;
+
+    // 3. Profit Analysis
+    const realRevenue = Math.round(grossRevenue / (1 + VAT_RATE));
+    const profit = realRevenue - operationalCost - outsourceFee;
     const margin = realRevenue > 0 ? (profit / realRevenue) * 100 : 0;
 
     return {
+      grossRevenue,
+      realRevenue,
+      operationalCost,
+      outsourceFee,
       tax,
       health,
       netPay,
-      realRevenue,
       profit,
       margin,
       isTaxThresholdReached: tax > 0 || health > 0,
-      isLowMargin: margin < MARGIN_WARNING_THRESHOLD
+      isLowMargin: margin < MARGIN_WARNING_THRESHOLD,
+      isLoss: profit < 0
     };
-  }, [revenue, cost]);
+  }, [mode, subletData, mgmtData]);
 
-  // Handler for calculating cost from target margin
-  const handleMarginChange = (newMargin: number) => {
-    setTargetMargin(newMargin);
-    const revNum = parseFloat(revenue);
-    if (!isNaN(revNum) && revNum > 0) {
-      const realRevenue = revNum / (1 + VAT_RATE);
-      // Formula: Cost = RealRevenue * (1 - Margin%)
-      const suggestedCost = realRevenue * (1 - newMargin / 100);
-      setCost(Math.floor(suggestedCost).toString());
+  const updateSublet = (field: keyof SublettingState, val: string) => {
+    setSubletData(prev => ({ ...prev, [field]: val }));
+  };
+
+  const updateMgmt = (field: keyof ManagementState, val: string) => {
+    setMgmtData(prev => ({ ...prev, [field]: val }));
+  };
+
+  // Helper: Generate Image Blob from Result Section
+  const generateImageBlob = async (): Promise<Blob | null> => {
+    if (!resultRef.current) return null;
+    try {
+      const canvas = await html2canvas(resultRef.current, {
+        scale: 2, 
+        backgroundColor: '#f3f4f6', // Use light gray to match body, or white. Using theme color looks more natural.
+        logging: false,
+        useCORS: true
+      });
+      return new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    } catch (error) {
+      console.error("Image generation failed", error);
+      return null;
+    }
+  };
+
+  // Action 1: Export PDF
+  const handleExportPDF = async () => {
+    if (!resultRef.current) return;
+    setIsGenerating(true);
+    
+    try {
+      // Capture the entire ref area (Inputs + Results)
+      const canvas = await html2canvas(resultRef.current, { 
+        scale: 2, 
+        backgroundColor: '#f3f4f6' 
+      });
+      const imgData = canvas.toDataURL('image/png');
+      
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+      
+      pdf.addImage(imgData, 'PNG', 0, 10, pdfWidth, pdfHeight);
+      pdf.save(`profit-calculation-${new Date().toISOString().slice(0,10)}.pdf`);
+    } catch (err) {
+      alert("PDF 產出失敗，請稍後再試");
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  // Action 2: Share Line
+  const handleShareLine = async () => {
+    if (!resultRef.current) return;
+    setIsGenerating(true);
+
+    try {
+      const blob = await generateImageBlob();
+      if (!blob) throw new Error("Blob creation failed");
+
+      const file = new File([blob], "calculation-result.png", { type: "image/png" });
+
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({
+          files: [file],
+          title: '包租代管試算結果',
+          text: '這是我的試算結果圖表'
+        });
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = "calculation-result.png";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        
+        alert("已為您下載試算圖片！\n\n電腦版請直接將圖片「拖曳」至 LINE 聊天室傳送。");
+      }
+    } catch (err) {
+      if ((err as Error).name !== 'AbortError') { 
+         console.error(err);
+         alert("分享功能暫時無法使用，請使用截圖方式。");
+      }
+    } finally {
+      setIsGenerating(false);
     }
   };
 
   return (
-    <div className="max-w-4xl mx-auto">
+    <div className="max-w-4xl mx-auto pb-20">
       {/* Header */}
       <div className="text-center mb-8">
         <h1 className="text-3xl md:text-4xl font-bold text-slate-800 mb-2 flex items-center justify-center gap-3">
@@ -96,157 +202,207 @@ export const Calculator: React.FC = () => {
         <p className="text-gray-500">外包薪酬結算與利潤分析專業版</p>
       </div>
 
-      {/* Input Section */}
-      <div className="bg-white rounded-2xl shadow-xl p-6 md:p-8 mb-8 border border-gray-100">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-          <InputSection
-            label="公司向客戶收取金額 (含稅)"
-            subLabel="向房東/房客收取的服務費總額"
-            value={revenue}
-            onChange={setRevenue}
-            icon="money"
-            placeholder="例如：15000"
-          />
-          
-          <InputSection
-            label="議定給外包人員費用 (稅前)"
-            subLabel="談好的佣金/獎金金額"
-            value={cost}
-            onChange={setCost}
-            icon="handshake"
-            placeholder="例如：12000"
-            actionElement={
-              <button
-                onClick={() => setIsAssistantOpen(!isAssistantOpen)}
-                className={`text-sm px-3 py-1 rounded-full flex items-center gap-1 transition-colors ${
-                  isAssistantOpen 
-                    ? 'bg-indigo-100 text-indigo-700 font-medium' 
-                    : 'bg-gray-100 text-gray-600 hover:bg-indigo-50 hover:text-indigo-600'
-                }`}
-              >
-                {isAssistantOpen ? <X className="w-4 h-4" /> : <Wand2 className="w-4 h-4" />}
-                {isAssistantOpen ? '關閉助手' : '預算試算'}
-              </button>
-            }
-          >
-            {/* Smart Budget Assistant Panel */}
-            {isAssistantOpen && (
-              <div className="mt-4 bg-slate-50 border border-indigo-100 rounded-xl p-4 animate-fade-in">
-                <div className="flex justify-between items-center mb-4">
-                  <span className="text-indigo-800 font-bold text-sm flex items-center gap-1">
-                    <Wand2 className="w-4 h-4" />
-                    利潤倒推成本助手
-                  </span>
-                  <span className="text-xs text-gray-400">依據營收自動計算建議成本</span>
-                </div>
-                
-                {(!revenue || parseFloat(revenue) <= 0) ? (
-                  <div className="text-center text-gray-500 py-2 text-sm">
-                    請先輸入左側「收取金額」即可開始試算。
-                  </div>
-                ) : (
-                  <>
-                    <div className="mb-4">
-                      <div className="flex justify-between text-sm mb-2 font-medium">
-                        <span>目標公司毛利率</span>
-                        <span className="text-indigo-600">{targetMargin}%</span>
-                      </div>
-                      <input
-                        type="range"
-                        min="0"
-                        max="50"
-                        step="0.5"
-                        value={targetMargin}
-                        onChange={(e) => handleMarginChange(parseFloat(e.target.value))}
-                        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
-                      />
-                      <div className="flex justify-between text-xs text-gray-400 mt-1">
-                        <span>0% (完全外包)</span>
-                        <span>50% (高利潤)</span>
-                      </div>
-                    </div>
-
-                    <div className="flex gap-2 mb-2">
-                      {[15, 20, 30].map((preset) => (
-                        <button
-                          key={preset}
-                          onClick={() => handleMarginChange(preset)}
-                          className={`flex-1 py-1 text-xs rounded border transition-colors ${
-                            targetMargin === preset
-                              ? 'bg-indigo-600 text-white border-indigo-600'
-                              : 'bg-white text-gray-600 border-gray-200 hover:border-indigo-300'
-                          }`}
-                        >
-                          {preset === 20 ? '標準 (20%)' : preset < 20 ? `讓利 (${preset}%)` : `高利 (${preset}%)`}
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
-          </InputSection>
-        </div>
+      {/* Mode Switcher Tabs - Outside of Capture */}
+      <div className="bg-white rounded-t-2xl shadow-sm border-b border-gray-200 flex overflow-hidden mb-0">
+        <button
+          onClick={() => setMode('subletting')}
+          className={`flex-1 py-4 flex items-center justify-center gap-2 font-bold transition-all ${
+            mode === 'subletting' 
+              ? 'bg-indigo-600 text-white shadow-inner' 
+              : 'bg-gray-50 text-gray-500 hover:bg-gray-100'
+          }`}
+        >
+          <Building2 className="w-5 h-5" />
+          模式 A：包租轉租
+        </button>
+        <button
+          onClick={() => setMode('management')}
+          className={`flex-1 py-4 flex items-center justify-center gap-2 font-bold transition-all ${
+            mode === 'management' 
+              ? 'bg-emerald-600 text-white shadow-inner' 
+              : 'bg-gray-50 text-gray-500 hover:bg-gray-100'
+          }`}
+        >
+          <Briefcase className="w-5 h-5" />
+          模式 B：代管服務
+        </button>
       </div>
 
-      {/* Results Section */}
-      {result && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-fade-in-up">
+      {/* START CAPTURE AREA: Inputs + Results */}
+      <div ref={resultRef} className="bg-slate-100 pb-4">
+        
+        {/* Input Section */}
+        <div className="bg-white rounded-b-2xl shadow-xl p-6 md:p-8 mb-8 border border-t-0 border-gray-100">
           
-          {/* Cashier Card */}
-          <div className="bg-white rounded-xl shadow-lg overflow-hidden border-l-4 border-indigo-500">
-            <div className="bg-indigo-50 p-4 border-b border-indigo-100 flex items-center gap-2">
-              <Wallet className="w-5 h-5 text-indigo-600" />
-              <h3 className="text-lg font-bold text-indigo-900">1. 付款結算單 (給出納)</h3>
-            </div>
-            <div className="p-6 space-y-1">
-              <ResultRow label="議定費用 (稅前)" amount={parseFloat(cost)} />
-              <ResultRow label="(-) 代扣所得稅 (10%)" amount={result.tax} type="negative" />
-              <ResultRow label="(-) 二代健保 (2.11%)" amount={result.health} type="negative" />
-              <div className="my-4 border-t border-dashed border-gray-300"></div>
-              <ResultRow label="應匯款金額 (實付)" amount={result.netPay} type="highlight" />
+          <h2 className="text-xl font-bold text-gray-700 mb-6 border-l-4 border-indigo-500 pl-3">
+            {mode === 'subletting' ? '試算條件：包租轉租' : '試算條件：代管服務'}
+          </h2>
 
-              {result.isTaxThresholdReached && (
-                <div className="mt-4 p-3 bg-orange-50 rounded-lg flex items-start gap-2 text-sm text-orange-800 border border-orange-200">
-                  <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />
-                  <span>注意：單次給付超過門檻 ($20,000)，已自動計算預扣稅額與二代健保。</span>
+          {/* Mode A Inputs */}
+          {mode === 'subletting' && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 animate-fade-in">
+              <div className="md:col-span-2 p-3 bg-indigo-50 rounded-lg text-indigo-800 text-sm flex items-center gap-2">
+                  <Info className="w-4 h-4" />
+                  說明：公司承租物件後轉租，賺取租金價差。
+              </div>
+              <InputSection
+                label="每月承租成本"
+                subLabel="公司付給房東的租金"
+                value={subletData.rentCost}
+                onChange={(val) => updateSublet('rentCost', val)}
+                icon="building"
+                placeholder="例如：20000"
+              />
+              <InputSection
+                label="每月總租金收入"
+                subLabel="向房客收取的總金額"
+                value={subletData.totalRevenue}
+                onChange={(val) => updateSublet('totalRevenue', val)}
+                icon="money"
+                placeholder="例如：45000"
+              />
+              <InputSection
+                label="外包管理費率"
+                subLabel="給業務/管理員的比例"
+                value={subletData.outsourceRate}
+                onChange={(val) => updateSublet('outsourceRate', val)}
+                icon="percent"
+                placeholder="10"
+                suffix="%"
+              />
+            </div>
+          )}
+
+          {/* Mode B Inputs */}
+          {mode === 'management' && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 animate-fade-in">
+              <div className="md:col-span-2 p-3 bg-emerald-50 rounded-lg text-emerald-800 text-sm flex items-center gap-2">
+                  <Info className="w-4 h-4" />
+                  說明：公司幫房東管理，賺取服務費，再分潤給外包人員。
+              </div>
+              <InputSection
+                label="物件月租金"
+                subLabel="房客實際繳交的租金"
+                value={mgmtData.rentAmount}
+                onChange={(val) => updateMgmt('rentAmount', val)}
+                icon="building"
+                placeholder="例如：30000"
+              />
+              <InputSection
+                label="服務費率"
+                subLabel="向房東收取的%數"
+                value={mgmtData.serviceFeeRate}
+                onChange={(val) => updateMgmt('serviceFeeRate', val)}
+                icon="percent"
+                placeholder="15"
+                suffix="%"
+              />
+              <InputSection
+                label="外包分潤比例"
+                subLabel="將服務費分給外包的比例"
+                value={mgmtData.splitRatio}
+                onChange={(val) => updateMgmt('splitRatio', val)}
+                icon="handshake"
+                placeholder="50"
+                suffix="%"
+              />
+            </div>
+          )}
+        </div>
+
+        {/* Results Section */}
+        {result && (
+          <div className="animate-fade-in-up">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              
+              {/* Cashier Card */}
+              <div className="bg-white rounded-xl shadow-lg overflow-hidden border-l-4 border-blue-500">
+                <div className="bg-blue-50 p-4 border-b border-blue-100 flex items-center gap-2">
+                  <Wallet className="w-5 h-5 text-blue-600" />
+                  <h3 className="text-lg font-bold text-blue-900">1. 付款結算單 (給出納)</h3>
                 </div>
-              )}
+                <div className="p-6 space-y-1">
+                  <ResultRow label="外包費用 (Gross)" amount={result.outsourceFee} />
+                  <ResultRow label="(-) 代扣所得稅 (10%)" amount={result.tax} type="negative" />
+                  <ResultRow label="(-) 二代健保 (2.11%)" amount={result.health} type="negative" />
+                  <div className="my-4 border-t border-dashed border-gray-300"></div>
+                  <ResultRow label="應匯款金額 (Net Pay)" amount={result.netPay} type="highlight" />
+
+                  {result.isTaxThresholdReached && (
+                    <div className="mt-4 p-3 bg-orange-50 rounded-lg flex items-start gap-2 text-sm text-orange-800 border border-orange-200">
+                      <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                      <span>已達扣繳門檻 ($20,000)，自動計算稅額與健保。</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Boss Card */}
+              <div className="bg-white rounded-xl shadow-lg overflow-hidden border-l-4 border-gray-600">
+                <div className="bg-gray-100 p-4 border-b border-gray-200 flex items-center gap-2">
+                  <TrendingUp className="w-5 h-5 text-gray-700" />
+                  <h3 className="text-lg font-bold text-gray-900">2. 利潤分析 (老闆專用)</h3>
+                </div>
+                <div className="p-6 space-y-1">
+                  <ResultRow label="公司未稅營收 ( /1.05)" amount={result.realRevenue} />
+                  {result.operationalCost > 0 && (
+                    <ResultRow label="(-) 承租成本" amount={result.operationalCost} type="negative" />
+                  )}
+                  <ResultRow label="(-) 外包費用" amount={result.outsourceFee} type="negative" />
+                  <div className="my-4 border-t border-dashed border-gray-300"></div>
+                  <ResultRow 
+                    label="公司淨利 (Net Profit)" 
+                    amount={result.profit} 
+                    type={result.isLoss ? 'negative' : 'positive'} 
+                  />
+                  <ResultRow 
+                    label="毛利率 (Margin)" 
+                    amount={result.margin.toFixed(1)} 
+                    isPercentage 
+                    type={result.isLowMargin || result.isLoss ? 'negative' : 'positive'}
+                    prefix=""
+                  />
+
+                  {(result.isLowMargin || result.isLoss) && (
+                    <div className="mt-4 p-3 bg-red-50 rounded-lg flex items-start gap-2 text-sm text-red-800 border border-red-200 font-bold">
+                      <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                      <span>
+                        {result.isLoss ? "警告：公司虧損中！" : "警告：毛利率低於 20% 安全水位。"}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+            
+            {/* Timestamp for Capture */}
+            <div className="text-right mt-2 text-xs text-gray-400 font-mono pr-2">
+              試算日期: {new Date().toLocaleString('zh-TW')}
             </div>
           </div>
+        )}
+      </div> 
+      {/* END CAPTURE AREA */}
 
-          {/* Boss Card */}
-          <div className="bg-white rounded-xl shadow-lg overflow-hidden border-l-4 border-emerald-500">
-            <div className="bg-emerald-50 p-4 border-b border-emerald-100 flex items-center gap-2">
-              <TrendingUp className="w-5 h-5 text-emerald-600" />
-              <h3 className="text-lg font-bold text-emerald-900">2. 利潤分析 (老闆專用)</h3>
-            </div>
-            <div className="p-6 space-y-1">
-              <ResultRow label="公司營收 (扣除5%營業稅)" amount={result.realRevenue} />
-              <ResultRow label="(-) 外包成本 (稅前)" amount={parseFloat(cost)} type="negative" />
-              <div className="my-4 border-t border-dashed border-gray-300"></div>
-              <ResultRow 
-                label="公司淨利 (Net Profit)" 
-                amount={result.profit} 
-                type={result.profit >= 0 ? 'positive' : 'negative'} 
-              />
-              <ResultRow 
-                label="毛利率 (Margin)" 
-                amount={result.margin.toFixed(1)} 
-                isPercentage 
-                type={result.isLowMargin ? 'negative' : 'positive'}
-                prefix=""
-              />
-
-              {result.isLowMargin && (
-                <div className="mt-4 p-3 bg-red-50 rounded-lg flex items-start gap-2 text-sm text-red-800 border border-red-200">
-                  <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-                  <span>警告：毛利率過低 (&lt;20%)，建議重新談判或降低外包費。</span>
-                </div>
-              )}
-            </div>
-          </div>
-
+      {/* Action Buttons */}
+      {result && (
+        <div className="mt-8 grid grid-cols-2 gap-4">
+          <button
+            onClick={handleExportPDF}
+            disabled={isGenerating}
+            className="flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-6 rounded-lg transition-colors shadow-md disabled:opacity-50"
+          >
+            {isGenerating ? <Loader2 className="w-5 h-5 animate-spin" /> : <FileDown className="w-5 h-5" />}
+            匯出 PDF
+          </button>
+          <button
+            onClick={handleShareLine}
+            disabled={isGenerating}
+            className="flex items-center justify-center gap-2 bg-[#06C755] hover:bg-[#05b34c] text-white font-bold py-3 px-6 rounded-lg transition-colors shadow-md disabled:opacity-50"
+          >
+              {isGenerating ? <Loader2 className="w-5 h-5 animate-spin" /> : <Share2 className="w-5 h-5" />}
+            分享 LINE 圖片
+          </button>
         </div>
       )}
     </div>
