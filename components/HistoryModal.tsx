@@ -29,6 +29,7 @@ export const HistoryModal: React.FC<HistoryModalProps> = ({
             試算歷史紀錄 ({records.length})
           </h3>
           <button 
+            type="button"
             onClick={onClose}
             className="p-2 hover:bg-gray-200 rounded-full transition-colors text-gray-500"
           >
@@ -75,14 +76,23 @@ export const HistoryModal: React.FC<HistoryModalProps> = ({
 
                 <div className="flex gap-2 pl-8">
                   <button
-                    onClick={() => { onLoad(record); onClose(); }}
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onLoad(record); 
+                      onClose(); 
+                    }}
                     className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition-colors"
                   >
                     <RotateCcw className="w-4 h-4" />
                     載入資料
                   </button>
                   <button
-                    onClick={() => onDelete(record.id)}
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDelete(record.id);
+                    }}
                     className="px-4 py-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg text-sm font-bold transition-colors"
                     title="刪除紀錄"
                   >

@@ -37,21 +37,19 @@ export const Calculator: React.FC = () => {
   
   // History State
   const [showHistory, setShowHistory] = useState(false);
-  const [savedRecords, setSavedRecords] = useState<SavedRecord[]>([]);
-
-  // Load history from local storage on mount
-  useEffect(() => {
-    const saved = localStorage.getItem('rental_calc_history');
-    if (saved) {
-      try {
-        setSavedRecords(JSON.parse(saved));
-      } catch (e) {
-        console.error("Failed to parse history", e);
-      }
+  
+  // Use Lazy Initialization to prevent localStorage race conditions
+  const [savedRecords, setSavedRecords] = useState<SavedRecord[]>(() => {
+    try {
+      const saved = localStorage.getItem('rental_calc_history');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      console.error("Failed to parse history", e);
+      return [];
     }
-  }, []);
+  });
 
-  // Persist history when changed
+  // Persist history whenever it changes (Skip initial mount if strictly using React 18 Effect behavior, but lazy init handles logic safely)
   useEffect(() => {
     localStorage.setItem('rental_calc_history', JSON.stringify(savedRecords));
   }, [savedRecords]);
