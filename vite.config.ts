@@ -4,6 +4,6 @@ import react from '@vitejs/plugin-react'
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
-  // 設定 Base Path 為儲存庫名稱，確保在 GitHub Pages 子目錄能正確讀取資源
-  base: '/mylove-okane/',
+  // Vercel 部署請使用 '/' (根目錄)，GitHub Pages 才需要子路徑
+  base: '/',
 })
