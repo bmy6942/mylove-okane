@@ -1,14 +1,15 @@
 import React from 'react';
-import { DollarSign, Handshake, Percent, Building } from 'lucide-react';
+import { DollarSign, Handshake, Percent, Building, MapPin } from 'lucide-react';
 
 interface InputSectionProps {
   label: string;
   subLabel: string;
   value: string;
   onChange: (val: string) => void;
-  icon: 'money' | 'handshake' | 'percent' | 'building';
+  icon: 'money' | 'handshake' | 'percent' | 'building' | 'location';
   placeholder?: string;
   suffix?: string;
+  type?: 'text' | 'number';
 }
 
 export const InputSection: React.FC<InputSectionProps> = ({ 
@@ -18,7 +19,8 @@ export const InputSection: React.FC<InputSectionProps> = ({
   onChange, 
   icon,
   placeholder,
-  suffix
+  suffix,
+  type = 'number'
 }) => {
   const getIcon = () => {
     switch (icon) {
@@ -26,6 +28,7 @@ export const InputSection: React.FC<InputSectionProps> = ({
       case 'handshake': return <Handshake className="w-5 h-5 text-blue-600" />;
       case 'percent': return <Percent className="w-5 h-5 text-indigo-600" />;
       case 'building': return <Building className="w-5 h-5 text-orange-600" />;
+      case 'location': return <MapPin className="w-5 h-5 text-red-600" />;
       default: return <DollarSign className="w-5 h-5 text-gray-600" />;
     }
   };
@@ -40,12 +43,12 @@ export const InputSection: React.FC<InputSectionProps> = ({
       </div>
       <div className="relative">
         <input
-          type="number"
+          type={type}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           className="w-full p-3 pl-4 border border-gray-300 rounded-lg shadow-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-lg transition-all"
           placeholder={placeholder}
-          min="0"
+          min={type === 'number' ? "0" : undefined}
         />
         {suffix && (
           <div className="absolute inset-y-0 right-0 pr-4 flex items-center pointer-events-none">

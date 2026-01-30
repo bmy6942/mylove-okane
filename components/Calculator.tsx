@@ -9,7 +9,8 @@ import {
   Briefcase,
   FileDown,
   Share2,
-  Loader2
+  Loader2,
+  MapPin
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
@@ -31,6 +32,9 @@ export const Calculator: React.FC = () => {
   const [isGenerating, setIsGenerating] = useState(false);
   const resultRef = useRef<HTMLDivElement>(null);
   
+  // Common State
+  const [address, setAddress] = useState('');
+
   // State for Mode A: Subletting
   const [subletData, setSubletData] = useState<SublettingState>({
     rentCost: '',
@@ -144,7 +148,7 @@ export const Calculator: React.FC = () => {
       const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
       
       pdf.addImage(imgData, 'PNG', 0, 10, pdfWidth, pdfHeight);
-      pdf.save(`profit-calculation-${new Date().toISOString().slice(0,10)}.pdf`);
+      pdf.save(`profit-calculation-${address ? address : 'report'}-${new Date().toISOString().slice(0,10)}.pdf`);
     } catch (err) {
       alert("PDF 產出失敗，請稍後再試");
     } finally {
@@ -166,14 +170,14 @@ export const Calculator: React.FC = () => {
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({
           files: [file],
-          title: '包租代管試算結果',
-          text: '這是我的試算結果圖表'
+          title: `包租代管試算 - ${address}`,
+          text: `這是 ${address || '物件'} 的試算結果`
         });
       } else {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = "calculation-result.png";
+        a.download = `calculation-${address ? address : 'result'}.png`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -234,85 +238,110 @@ export const Calculator: React.FC = () => {
         {/* Input Section */}
         <div className="bg-white rounded-b-2xl shadow-xl p-6 md:p-8 mb-8 border border-t-0 border-gray-100">
           
-          <h2 className="text-xl font-bold text-gray-700 mb-6 border-l-4 border-indigo-500 pl-3">
-            {mode === 'subletting' ? '試算條件：包租轉租' : '試算條件：代管服務'}
+          <h2 className="text-xl font-bold text-gray-700 mb-6 border-l-4 border-indigo-500 pl-3 flex justify-between">
+            <span>{mode === 'subletting' ? '試算條件：包租轉租' : '試算條件：代管服務'}</span>
           </h2>
 
-          {/* Mode A Inputs */}
-          {mode === 'subletting' && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 animate-fade-in">
-              <div className="md:col-span-2 p-3 bg-indigo-50 rounded-lg text-indigo-800 text-sm flex items-center gap-2">
-                  <Info className="w-4 h-4" />
-                  說明：公司承租物件後轉租，賺取租金價差。
-              </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 animate-fade-in">
+            {/* Common Address Input - Always Top */}
+            <div className="md:col-span-2">
               <InputSection
-                label="每月承租成本"
-                subLabel="公司付給房東的租金"
-                value={subletData.rentCost}
-                onChange={(val) => updateSublet('rentCost', val)}
-                icon="building"
-                placeholder="例如：20000"
+                label="物件地址 / 代號"
+                subLabel="用於報表辨識，例如：中正路123號-A室"
+                value={address}
+                onChange={setAddress}
+                icon="location"
+                type="text"
+                placeholder="請輸入物件地址..."
               />
-              <InputSection
-                label="每月總租金收入"
-                subLabel="向房客收取的總金額"
-                value={subletData.totalRevenue}
-                onChange={(val) => updateSublet('totalRevenue', val)}
-                icon="money"
-                placeholder="例如：45000"
-              />
-              <InputSection
-                label="外包管理費率"
-                subLabel="給業務/管理員的比例"
-                value={subletData.outsourceRate}
-                onChange={(val) => updateSublet('outsourceRate', val)}
-                icon="percent"
-                placeholder="10"
-                suffix="%"
-              />
+              <hr className="mt-8 border-gray-100" />
             </div>
-          )}
 
-          {/* Mode B Inputs */}
-          {mode === 'management' && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 animate-fade-in">
-              <div className="md:col-span-2 p-3 bg-emerald-50 rounded-lg text-emerald-800 text-sm flex items-center gap-2">
-                  <Info className="w-4 h-4" />
-                  說明：公司幫房東管理，賺取服務費，再分潤給外包人員。
-              </div>
-              <InputSection
-                label="物件月租金"
-                subLabel="房客實際繳交的租金"
-                value={mgmtData.rentAmount}
-                onChange={(val) => updateMgmt('rentAmount', val)}
-                icon="building"
-                placeholder="例如：30000"
-              />
-              <InputSection
-                label="服務費率"
-                subLabel="向房東收取的%數"
-                value={mgmtData.serviceFeeRate}
-                onChange={(val) => updateMgmt('serviceFeeRate', val)}
-                icon="percent"
-                placeholder="15"
-                suffix="%"
-              />
-              <InputSection
-                label="外包分潤比例"
-                subLabel="將服務費分給外包的比例"
-                value={mgmtData.splitRatio}
-                onChange={(val) => updateMgmt('splitRatio', val)}
-                icon="handshake"
-                placeholder="50"
-                suffix="%"
-              />
-            </div>
-          )}
+            {/* Mode A Inputs */}
+            {mode === 'subletting' && (
+              <>
+                <div className="md:col-span-2 p-3 bg-indigo-50 rounded-lg text-indigo-800 text-sm flex items-center gap-2">
+                    <Info className="w-4 h-4" />
+                    說明：公司承租物件後轉租，賺取租金價差。
+                </div>
+                <InputSection
+                  label="每月承租成本"
+                  subLabel="公司付給房東的租金"
+                  value={subletData.rentCost}
+                  onChange={(val) => updateSublet('rentCost', val)}
+                  icon="building"
+                  placeholder="例如：20000"
+                />
+                <InputSection
+                  label="每月總租金收入"
+                  subLabel="向房客收取的總金額"
+                  value={subletData.totalRevenue}
+                  onChange={(val) => updateSublet('totalRevenue', val)}
+                  icon="money"
+                  placeholder="例如：45000"
+                />
+                <InputSection
+                  label="外包管理費率"
+                  subLabel="給業務/管理員的比例"
+                  value={subletData.outsourceRate}
+                  onChange={(val) => updateSublet('outsourceRate', val)}
+                  icon="percent"
+                  placeholder="10"
+                  suffix="%"
+                />
+              </>
+            )}
+
+            {/* Mode B Inputs */}
+            {mode === 'management' && (
+              <>
+                <div className="md:col-span-2 p-3 bg-emerald-50 rounded-lg text-emerald-800 text-sm flex items-center gap-2">
+                    <Info className="w-4 h-4" />
+                    說明：公司幫房東管理，賺取服務費，再分潤給外包人員。
+                </div>
+                <InputSection
+                  label="物件月租金"
+                  subLabel="房客實際繳交的租金"
+                  value={mgmtData.rentAmount}
+                  onChange={(val) => updateMgmt('rentAmount', val)}
+                  icon="building"
+                  placeholder="例如：30000"
+                />
+                <InputSection
+                  label="服務費率"
+                  subLabel="向房東收取的%數"
+                  value={mgmtData.serviceFeeRate}
+                  onChange={(val) => updateMgmt('serviceFeeRate', val)}
+                  icon="percent"
+                  placeholder="15"
+                  suffix="%"
+                />
+                <InputSection
+                  label="外包分潤比例"
+                  subLabel="將服務費分給外包的比例"
+                  value={mgmtData.splitRatio}
+                  onChange={(val) => updateMgmt('splitRatio', val)}
+                  icon="handshake"
+                  placeholder="50"
+                  suffix="%"
+                />
+              </>
+            )}
+          </div>
         </div>
 
         {/* Results Section */}
         {result && (
           <div className="animate-fade-in-up">
+            
+            {/* Address Header in Results - for PDF/Screenshot context */}
+            <div className="mb-4 text-center">
+              <div className="inline-flex items-center gap-2 px-4 py-1.5 bg-gray-200 rounded-full text-gray-700 font-medium text-sm">
+                <MapPin className="w-4 h-4" />
+                {address || '未指定物件地址'}
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               
               {/* Cashier Card */}
