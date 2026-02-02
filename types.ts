@@ -4,7 +4,12 @@ export interface CalculationResult {
   // Common Financials
   grossRevenue: number;     // Total money received from client
   realRevenue: number;      // Revenue excluding VAT (5%)
-  operationalCost: number;  // Cost of Goods (e.g., Rent paid to landlord)
+  operationalCost: number;  // Cost of Goods (Total Cost)
+  
+  // Breakdown
+  rentCostOnly: number;     // Base rent paid to landlord
+  amortizationTotal: number;// Total of extra items
+  
   outsourceFee: number;     // Gross fee to agent
   
   // Tax & Remittance
@@ -22,10 +27,17 @@ export interface CalculationResult {
   isLoss: boolean;
 }
 
+export interface AmortizationItem {
+  id: string;
+  name: string;
+  amount: string;
+}
+
 export interface SublettingState {
   rentCost: string;       // Monthly Rent Cost
   totalRevenue: string;   // Monthly Total Revenue
   outsourceRate: string;  // Percentage
+  amortizationItems: AmortizationItem[]; // Dynamic list of extra costs
 }
 
 export interface ManagementState {

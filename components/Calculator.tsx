@@ -12,7 +12,10 @@ import {
   Loader2,
   MapPin,
   Save,
-  History
+  History,
+  Plus,
+  Trash2,
+  Receipt
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
@@ -49,7 +52,7 @@ export const Calculator: React.FC = () => {
     }
   });
 
-  // Persist history whenever it changes (Skip initial mount if strictly using React 18 Effect behavior, but lazy init handles logic safely)
+  // Persist history whenever it changes
   useEffect(() => {
     localStorage.setItem('rental_calc_history', JSON.stringify(savedRecords));
   }, [savedRecords]);
@@ -61,7 +64,8 @@ export const Calculator: React.FC = () => {
   const [subletData, setSubletData] = useState<SublettingState>({
     rentCost: '',
     totalRevenue: '',
-    outsourceRate: '10'
+    outsourceRate: '10',
+    amortizationItems: []
   });
 
   // State for Mode B: Management
@@ -71,10 +75,39 @@ export const Calculator: React.FC = () => {
     splitRatio: '50'
   });
 
+  // --- AMORTIZATION HANDLERS (Mode A) ---
+  const addAmortizationItem = () => {
+    setSubletData(prev => ({
+      ...prev,
+      amortizationItems: [
+        ...prev.amortizationItems,
+        { id: Date.now().toString(), name: '', amount: '' }
+      ]
+    }));
+  };
+
+  const removeAmortizationItem = (id: string) => {
+    setSubletData(prev => ({
+      ...prev,
+      amortizationItems: prev.amortizationItems.filter(item => item.id !== id)
+    }));
+  };
+
+  const updateAmortizationItem = (id: string, field: 'name' | 'amount', value: string) => {
+    setSubletData(prev => ({
+      ...prev,
+      amortizationItems: prev.amortizationItems.map(item => 
+        item.id === id ? { ...item, [field]: value } : item
+      )
+    }));
+  };
+
   // Main Calculation Logic
   const result: CalculationResult | null = useMemo(() => {
     let grossRevenue = 0;
     let outsourceFee = 0;
+    let rentCostOnly = 0;
+    let amortizationTotal = 0;
     let operationalCost = 0;
 
     // 1. Determine base figures based on mode
@@ -85,8 +118,15 @@ export const Calculator: React.FC = () => {
 
       if (isNaN(revenue) || isNaN(cost) || isNaN(rate)) return null;
 
+      // Calculate Amortization
+      amortizationTotal = subletData.amortizationItems.reduce((sum, item) => {
+        const val = parseFloat(item.amount);
+        return sum + (isNaN(val) ? 0 : val);
+      }, 0);
+
       grossRevenue = revenue;
-      operationalCost = cost;
+      rentCostOnly = cost;
+      operationalCost = cost + amortizationTotal; // Rent + Extra Costs
       outsourceFee = Math.round(revenue * (rate / 100));
 
     } else {
@@ -115,6 +155,8 @@ export const Calculator: React.FC = () => {
       grossRevenue,
       realRevenue,
       operationalCost,
+      rentCostOnly,
+      amortizationTotal,
       outsourceFee,
       tax,
       health,
@@ -164,7 +206,11 @@ export const Calculator: React.FC = () => {
     setMode(record.mode);
     setAddress(record.address);
     if (record.mode === 'subletting' && record.subletData) {
-      setSubletData(record.subletData);
+      // Ensure backwards compatibility by providing default [] for amortizationItems
+      setSubletData({
+        ...record.subletData,
+        amortizationItems: record.subletData.amortizationItems || []
+      });
     } else if (record.mode === 'management' && record.mgmtData) {
       setMgmtData(record.mgmtData);
     }
@@ -178,7 +224,6 @@ export const Calculator: React.FC = () => {
 
   // --- EXPORT LOGIC ---
 
-  // Helper: Generate Image Blob from Result Section
   const generateImageBlob = async (): Promise<Blob | null> => {
     if (!resultRef.current) return null;
     try {
@@ -270,7 +315,7 @@ export const Calculator: React.FC = () => {
         </h1>
         <p className="text-gray-500">外包薪酬結算與利潤分析專業版</p>
         
-        {/* History Button - Top Right */}
+        {/* History Button */}
         <button 
           onClick={() => setShowHistory(true)}
           className="absolute right-0 top-0 md:top-2 p-2 flex items-center gap-2 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
@@ -314,7 +359,7 @@ export const Calculator: React.FC = () => {
         </button>
       </div>
 
-      {/* START CAPTURE AREA: Inputs + Results */}
+      {/* START CAPTURE AREA */}
       <div ref={resultRef} className="bg-slate-100 pb-4">
         
         {/* Input Section */}
@@ -325,7 +370,7 @@ export const Calculator: React.FC = () => {
           </h2>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8 animate-fade-in">
-            {/* Common Address Input - Always Top */}
+            {/* Common Address Input */}
             <div className="md:col-span-2">
               <InputSection
                 label="物件地址 / 代號"
@@ -354,6 +399,62 @@ export const Calculator: React.FC = () => {
                   icon="building"
                   placeholder="例如：20000"
                 />
+
+                {/* Dynamic Amortization List */}
+                <div className="md:col-span-2 bg-gray-50 rounded-lg p-4 border border-gray-200">
+                  <div className="flex justify-between items-center mb-3">
+                    <label className="text-gray-700 font-bold flex items-center gap-2">
+                      <Receipt className="w-5 h-5 text-gray-600" />
+                      其他成本攤提 (選填)
+                    </label>
+                    <button
+                      onClick={addAmortizationItem}
+                      className="text-sm bg-white border border-gray-300 hover:bg-gray-100 text-gray-600 px-3 py-1.5 rounded-md flex items-center gap-1 transition-colors font-medium shadow-sm"
+                    >
+                      <Plus className="w-4 h-4" /> 新增項目
+                    </button>
+                  </div>
+                  
+                  {subletData.amortizationItems.length === 0 ? (
+                    <div className="text-sm text-gray-400 text-center py-2 italic">
+                      無額外成本項目 (例如：裝潢攤提、網路費...)
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {subletData.amortizationItems.map((item) => (
+                        <div key={item.id} className="flex gap-2 items-center">
+                          <input
+                            type="text"
+                            placeholder="項目名稱 (如: 裝潢)"
+                            value={item.name}
+                            onChange={(e) => updateAmortizationItem(item.id, 'name', e.target.value)}
+                            className="flex-1 p-2 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 outline-none"
+                          />
+                          <div className="relative w-32">
+                            <input
+                              type="number"
+                              placeholder="金額"
+                              value={item.amount}
+                              onChange={(e) => updateAmortizationItem(item.id, 'amount', e.target.value)}
+                              className="w-full p-2 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 outline-none text-right"
+                              min="0"
+                            />
+                          </div>
+                          <button
+                            onClick={() => removeAmortizationItem(item.id)}
+                            className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ))}
+                      <div className="text-right text-sm text-gray-500 mt-2 pr-10">
+                         小計: ${subletData.amortizationItems.reduce((acc, curr) => acc + (parseFloat(curr.amount) || 0), 0).toLocaleString()}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 <InputSection
                   label="每月總租金收入"
                   subLabel="向房客收取的總金額"
@@ -416,7 +517,6 @@ export const Calculator: React.FC = () => {
         {result && (
           <div className="animate-fade-in-up">
             
-            {/* Address Header in Results - for PDF/Screenshot context */}
             <div className="mb-4 text-center">
               <div className="inline-flex items-center gap-2 px-4 py-1.5 bg-gray-200 rounded-full text-gray-700 font-medium text-sm">
                 <MapPin className="w-4 h-4" />
@@ -456,9 +556,23 @@ export const Calculator: React.FC = () => {
                 </div>
                 <div className="p-6 space-y-1">
                   <ResultRow label="公司未稅營收 ( /1.05)" amount={result.realRevenue} />
-                  {result.operationalCost > 0 && (
-                    <ResultRow label="(-) 承租成本" amount={result.operationalCost} type="negative" />
+                  
+                  {/* Cost Breakdown */}
+                  {mode === 'subletting' ? (
+                    <>
+                      {result.rentCostOnly > 0 && (
+                        <ResultRow label="(-) 承租租金" amount={result.rentCostOnly} type="negative" />
+                      )}
+                      {result.amortizationTotal > 0 && (
+                        <ResultRow label="(-) 成本攤提" amount={result.amortizationTotal} type="negative" />
+                      )}
+                    </>
+                  ) : (
+                    result.operationalCost > 0 && (
+                      <ResultRow label="(-) 承租成本" amount={result.operationalCost} type="negative" />
+                    )
                   )}
+
                   <ResultRow label="(-) 外包費用" amount={result.outsourceFee} type="negative" />
                   <div className="my-4 border-t border-dashed border-gray-300"></div>
                   <ResultRow 
@@ -486,7 +600,6 @@ export const Calculator: React.FC = () => {
               </div>
             </div>
             
-            {/* Timestamp for Capture */}
             <div className="text-right mt-2 text-xs text-gray-400 font-mono pr-2">
               試算日期: {new Date().toLocaleString('zh-TW')}
             </div>
